@@ -45,10 +45,9 @@ curl -X POST http://localhost:3000/file-upload \
   -F "file=@./fixtures/sample.mp3"
 ```
 
-Expected response shape:
+## Verify sample frame count
 
-```json
-{
-  "frameCount": 1234
-}
+```bash
+mediainfo --Inform="Audio;%FrameCount%" fixtures/sample.mp3
+# 6089
 ```

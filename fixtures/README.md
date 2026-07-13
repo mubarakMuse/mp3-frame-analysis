@@ -1,3 +1,3 @@
 # Sample fixtures
 
-Place the assessment sample MP3 here as `sample.mp3`.
+- `sample.mp3` — assessment sample (MPEG-1 Layer III). Expected frame count: **6089** (`mediainfo`).
