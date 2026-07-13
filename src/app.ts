@@ -1,6 +1,6 @@
 import express from 'express'
 
-import { fileUploadRouter } from './routes/file-upload.js'
+import { fileUploadRouter, handleUploadErrors } from './routes/file-upload.js'
 
 export const createApp = () => {
   const app = express()
@@ -10,6 +10,7 @@ export const createApp = () => {
   })
 
   app.use(fileUploadRouter)
+  app.use(handleUploadErrors)
 
   return app
 }

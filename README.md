@@ -38,11 +38,21 @@ The server listens on `http://localhost:3000` (override with `PORT`).
 curl http://localhost:3000/health
 ```
 
-## Upload endpoint (coming next)
+## Upload endpoint
+
+`POST /file-upload` accepts a multipart form field named `file`.
 
 ```bash
 curl -X POST http://localhost:3000/file-upload \
   -F "file=@./fixtures/sample.mp3"
+```
+
+Expected response:
+
+```json
+{
+  "frameCount": 6089
+}
 ```
 
 ## Verify sample frame count
