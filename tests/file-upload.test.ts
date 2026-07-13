@@ -31,6 +31,30 @@ describe('POST /file-upload', () => {
     })
   })
 
+  it('returns 400 when the multipart field name is wrong', async () => {
+    const response = await request(app)
+      .post('/file-upload')
+      .attach('audio', sampleMp3, 'sample.mp3')
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      error: 'LIMIT_UNEXPECTED_FILE',
+      message: expect.stringContaining('multipart field named "file"'),
+    })
+  })
+
+  it('returns 400 for an empty uploaded file', async () => {
+    const response = await request(app)
+      .post('/file-upload')
+      .attach('file', Buffer.alloc(0), 'empty.mp3')
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      error: 'AppError',
+      message: expect.stringContaining('empty'),
+    })
+  })
+
   it('returns 400 for a non-MP3 payload', async () => {
     const response = await request(app)
       .post('/file-upload')
@@ -40,6 +64,21 @@ describe('POST /file-upload', () => {
     expect(response.body).toMatchObject({
       error: 'AppError',
       message: expect.stringContaining('MPEG Version 1 Audio Layer III'),
+    })
+  })
+})
+
+describe('unknown routes', () => {
+  const app = createApp()
+
+  it('returns 404 JSON for unknown paths', async () => {
+    const response = await request(app).get('/does-not-exist')
+
+    expect(response.status).toBe(404)
+    expect(response.headers['content-type']).toMatch(/application\/json/)
+    expect(response.body).toEqual({
+      error: 'NotFound',
+      message: 'Route not found',
     })
   })
 })
