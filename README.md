@@ -86,6 +86,13 @@ Example:
 
 No NPM package is used to parse MP3 frames.
 
+## Scalability
+
+- Uploads are written to disk (`uploads/`), not held entirely in RAM by multer
+- Frame counting reads the file in **64 KB chunks** with a small rolling buffer
+- Temporary upload files are deleted after each request
+- Upload size is capped at **100 MB**
+
 ## Verify the sample
 
 ```bash
@@ -116,6 +123,6 @@ fixtures/sample.mp3
 
 With more time:
 
-- Stream large uploads instead of buffering the whole file in memory
+- Tune chunk size / backpressure for very high concurrency
 - Support additional MPEG versions only if required
 - Add request logging / metrics for production use

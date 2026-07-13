@@ -1,3 +1,5 @@
+import { open } from 'node:fs/promises'
+
 import { AppError } from '../errors/app-error.js'
 
 /** MPEG-1 Layer III bitrates in kbps, indexed by header bitrate bits (1–14). */
@@ -7,6 +9,9 @@ const MPEG1_LAYER3_BITRATES_KBPS = [
 
 /** MPEG-1 sample rates in Hz, indexed by header sample-rate bits (0–2). */
 const MPEG1_SAMPLE_RATES_HZ = [44100, 48000, 32000] as const
+
+/** Read size for disk-backed parsing — keeps memory use bounded for large files. */
+const FILE_READ_CHUNK_BYTES = 64 * 1024
 
 const MPEG_VERSION_1 = 0b11
 const LAYER_III = 0b01
@@ -30,7 +35,7 @@ const isId3v2 = (buffer: Buffer, offset: number): boolean =>
   buffer[offset + 1] === 0x44 &&
   buffer[offset + 2] === 0x33
 
-const readId3v2Size = (buffer: Buffer, offset: number): number => {
+const getId3v2TagLength = (buffer: Buffer, offset: number): number => {
   // Synchsafe integer: 7 bits per byte
   const size =
     ((buffer[offset + 6]! & 0x7f) << 21) |
@@ -39,7 +44,11 @@ const readId3v2Size = (buffer: Buffer, offset: number): number => {
     (buffer[offset + 9]! & 0x7f)
 
   const footerPresent = (buffer[offset + 5]! & 0x10) !== 0
-  const totalTagLength = 10 + size + (footerPresent ? 10 : 0)
+  return 10 + size + (footerPresent ? 10 : 0)
+}
+
+const readId3v2Size = (buffer: Buffer, offset: number): number => {
+  const totalTagLength = getId3v2TagLength(buffer, offset)
 
   if (offset + totalTagLength > buffer.length) {
     throw new AppError('Invalid MP3: truncated ID3v2 tag', 400)
@@ -150,6 +159,45 @@ const isVbrMetadataFrame = (buffer: Buffer, offset: number, header: Mpeg1Layer3H
   return tag === 'Xing' || tag === 'Info' || tag === 'VBRI'
 }
 
+const countFramesInRange = (buffer: Buffer, start: number, end: number): number => {
+  let offset = findNextFrameOffset(buffer, start, end)
+
+  if (offset < 0) {
+    throw new AppError('Invalid MP3: expected MPEG Version 1 Audio Layer III frames', 400)
+  }
+
+  let frameCount = 0
+
+  while (offset + 4 <= end) {
+    const header = parseMpeg1Layer3Header(buffer, offset)
+
+    if (!header) {
+      const nextOffset = findNextFrameOffset(buffer, offset + 1, end)
+      if (nextOffset < 0) {
+        break
+      }
+      offset = nextOffset
+      continue
+    }
+
+    if (offset + header.frameLength > end) {
+      break
+    }
+
+    if (!isVbrMetadataFrame(buffer, offset, header)) {
+      frameCount += 1
+    }
+
+    offset += header.frameLength
+  }
+
+  if (frameCount === 0) {
+    throw new AppError('Invalid MP3: no complete audio frames found', 400)
+  }
+
+  return frameCount
+}
+
 /**
  * Counts MPEG Version 1 Audio Layer III frames in an MP3 buffer.
  *
@@ -174,41 +222,155 @@ export const countMp3Frames = (buffer: Buffer): number => {
     throw new AppError('Invalid MP3: no audio frames found', 400)
   }
 
-  offset = findNextFrameOffset(buffer, offset, end)
+  return countFramesInRange(buffer, offset, end)
+}
 
-  if (offset < 0) {
-    throw new AppError('Invalid MP3: expected MPEG Version 1 Audio Layer III frames', 400)
+type FrameWalkState = {
+  pending: Buffer
+  skippedId3: boolean
+  synced: boolean
+  frameCount: number
+}
+
+const createFrameWalkState = (): FrameWalkState => ({
+  pending: Buffer.alloc(0),
+  skippedId3: false,
+  synced: false,
+  frameCount: 0,
+})
+
+/**
+ * Consume as many complete frames as possible from the rolling buffer.
+ * Leaves any incomplete trailing bytes in `state.pending` for the next chunk.
+ */
+const consumePendingFrames = (state: FrameWalkState, hasMoreData: boolean): void => {
+  if (!state.skippedId3) {
+    if (state.pending.length < 10) {
+      if (!hasMoreData && state.pending.length > 0) {
+        throw new AppError('Invalid MP3: truncated ID3v2 tag', 400)
+      }
+      return
+    }
+
+    if (isId3v2(state.pending, 0)) {
+      const tagLength = getId3v2TagLength(state.pending, 0)
+      if (state.pending.length < tagLength) {
+        if (!hasMoreData) {
+          throw new AppError('Invalid MP3: truncated ID3v2 tag', 400)
+        }
+        return
+      }
+      state.pending = state.pending.subarray(tagLength)
+    }
+
+    state.skippedId3 = true
   }
 
-  let frameCount = 0
+  if (state.pending.length === 0) {
+    return
+  }
 
-  while (offset + 4 <= end) {
-    const header = parseMpeg1Layer3Header(buffer, offset)
+  let offset = 0
+
+  if (!state.synced) {
+    const nextOffset = findNextFrameOffset(state.pending, 0, state.pending.length)
+    if (nextOffset < 0) {
+      if (hasMoreData) {
+        // Keep a few bytes in case the sync word spans chunk boundaries
+        state.pending = state.pending.subarray(Math.max(0, state.pending.length - 3))
+      }
+      return
+    }
+    offset = nextOffset
+    state.synced = true
+  }
+
+  while (offset + 4 <= state.pending.length) {
+    const header = parseMpeg1Layer3Header(state.pending, offset)
 
     if (!header) {
-      const nextOffset = findNextFrameOffset(buffer, offset + 1, end)
+      const nextOffset = findNextFrameOffset(state.pending, offset + 1, state.pending.length)
       if (nextOffset < 0) {
-        break
+        state.pending = state.pending.subarray(offset)
+        return
       }
       offset = nextOffset
       continue
     }
 
-    if (offset + header.frameLength > end) {
-      // Truncated final frame — stop without counting it
-      break
+    if (offset + header.frameLength > state.pending.length) {
+      state.pending = state.pending.subarray(offset)
+      return
     }
 
-    if (!isVbrMetadataFrame(buffer, offset, header)) {
-      frameCount += 1
+    if (!isVbrMetadataFrame(state.pending, offset, header)) {
+      state.frameCount += 1
     }
 
     offset += header.frameLength
   }
 
-  if (frameCount === 0) {
-    throw new AppError('Invalid MP3: no complete audio frames found', 400)
-  }
+  state.pending = state.pending.subarray(offset)
+}
 
-  return frameCount
+/**
+ * Counts frames by reading the file in fixed-size chunks so large uploads do not
+ * need to be loaded entirely into memory.
+ */
+export const countMp3FramesFromFile = async (filePath: string): Promise<number> => {
+  const fileHandle = await open(filePath, 'r')
+
+  try {
+    const stats = await fileHandle.stat()
+
+    if (stats.size === 0) {
+      throw new AppError('Invalid MP3: empty file', 400)
+    }
+
+    let audioEnd = stats.size
+
+    if (stats.size >= 128) {
+      const tail = Buffer.alloc(128)
+      await fileHandle.read(tail, 0, 128, stats.size - 128)
+      const hasId3v1 = tail[0] === 0x54 && tail[1] === 0x41 && tail[2] === 0x47
+      if (hasId3v1) {
+        audioEnd = stats.size - 128
+      }
+    }
+
+    if (audioEnd === 0) {
+      throw new AppError('Invalid MP3: no audio frames found', 400)
+    }
+
+    const state = createFrameWalkState()
+    let position = 0
+
+    while (position < audioEnd) {
+      const bytesToRead = Math.min(FILE_READ_CHUNK_BYTES, audioEnd - position)
+      const chunk = Buffer.alloc(bytesToRead)
+      const { bytesRead } = await fileHandle.read(chunk, 0, bytesToRead, position)
+
+      if (bytesRead === 0) {
+        break
+      }
+
+      position += bytesRead
+      state.pending = Buffer.concat([state.pending, chunk.subarray(0, bytesRead)])
+      consumePendingFrames(state, position < audioEnd)
+    }
+
+    consumePendingFrames(state, false)
+
+    if (!state.synced) {
+      throw new AppError('Invalid MP3: expected MPEG Version 1 Audio Layer III frames', 400)
+    }
+
+    if (state.frameCount === 0) {
+      throw new AppError('Invalid MP3: no complete audio frames found', 400)
+    }
+
+    return state.frameCount
+  } finally {
+    await fileHandle.close()
+  }
 }

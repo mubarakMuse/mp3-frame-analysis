@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import { AppError } from '../src/errors/app-error.js'
-import { countMp3Frames } from '../src/services/count-mp3-frames.js'
+import { countMp3Frames, countMp3FramesFromFile } from '../src/services/count-mp3-frames.js'
 
 const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures')
 
@@ -76,5 +76,22 @@ describe('countMp3Frames', () => {
 
   it('throws AppError when no MPEG-1 Layer III frames are present', () => {
     expect(() => countMp3Frames(Buffer.from('not an mp3'))).toThrow(AppError)
+  })
+})
+
+describe('countMp3FramesFromFile', () => {
+  it('matches the buffer parser for the assessment sample', async () => {
+    const samplePath = join(fixturesDir, 'sample.mp3')
+    const fromFile = await countMp3FramesFromFile(samplePath)
+    const fromBuffer = countMp3Frames(readFileSync(samplePath))
+
+    expect(fromFile).toBe(6089)
+    expect(fromFile).toBe(fromBuffer)
+  })
+
+  it('throws AppError for a non-MP3 file path', async () => {
+    await expect(countMp3FramesFromFile(join(fixturesDir, 'README.md'))).rejects.toBeInstanceOf(
+      AppError,
+    )
   })
 })
