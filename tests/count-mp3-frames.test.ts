@@ -89,6 +89,11 @@ describe('countMp3FramesFromFile', () => {
     expect(fromFile).toBe(fromBuffer)
   })
 
+  it('matches mediainfo for a generated 3-second tone MP3', async () => {
+    const tonePath = join(fixturesDir, 'tone-3s.mp3')
+    await expect(countMp3FramesFromFile(tonePath)).resolves.toBe(116)
+  })
+
   it('throws AppError for a non-MP3 file path', async () => {
     await expect(countMp3FramesFromFile(join(fixturesDir, 'README.md'))).rejects.toBeInstanceOf(
       AppError,
