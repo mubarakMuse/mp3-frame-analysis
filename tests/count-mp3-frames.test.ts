@@ -4,7 +4,11 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import { AppError } from '../src/errors/app-error.js'
-import { countMp3Frames, countMp3FramesFromFile } from '../src/services/count-mp3-frames.js'
+import {
+  countMp3Frames,
+  countMp3FramesFromFile,
+  countMp3FramesFromStream,
+} from '../src/services/count-mp3-frames.js'
 
 const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures')
 
@@ -98,5 +102,19 @@ describe('countMp3FramesFromFile', () => {
     await expect(countMp3FramesFromFile(join(fixturesDir, 'README.md'))).rejects.toBeInstanceOf(
       AppError,
     )
+  })
+})
+
+describe('countMp3FramesFromStream', () => {
+  it('counts the sample when fed in small chunks', async () => {
+    const sample = readFileSync(join(fixturesDir, 'sample.mp3'))
+    const chunkSize = 1024
+    async function* chunks() {
+      for (let offset = 0; offset < sample.length; offset += chunkSize) {
+        yield sample.subarray(offset, offset + chunkSize)
+      }
+    }
+
+    await expect(countMp3FramesFromStream(chunks())).resolves.toBe(6089)
   })
 })

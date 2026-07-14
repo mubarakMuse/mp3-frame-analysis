@@ -38,7 +38,7 @@ describe('POST /file-upload', () => {
 
     expect(response.status).toBe(400)
     expect(response.body).toMatchObject({
-      error: 'LIMIT_UNEXPECTED_FILE',
+      error: 'AppError',
       message: expect.stringContaining('multipart field named "file"'),
     })
   })

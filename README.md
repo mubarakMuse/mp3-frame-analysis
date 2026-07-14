@@ -88,9 +88,10 @@ No NPM package is used to parse MP3 frames.
 
 ## Scalability
 
-- Uploads are written to disk (`uploads/`), not held entirely in RAM by multer
-- Frame counting reads the file in **64 KB chunks** with a small rolling buffer
-- Temporary upload files are deleted after each request
+- Uploads are parsed with **Busboy** as a stream — the file is never fully buffered in RAM
+- Frames are counted incrementally with a **carry-over buffer** across chunk boundaries
+- Concurrent uploads are capped with **p-limit** (default 4, override with `UPLOAD_CONCURRENCY`)
+- `stream.pipeline()` wires the request into Busboy for backpressure and cleanup
 - Upload size is capped at **100 MB**
 
 ## Verify the sample
@@ -123,6 +124,6 @@ fixtures/sample.mp3
 
 With more time:
 
-- Tune chunk size / backpressure for very high concurrency
+- Move heavy jobs to a queue (SQS / BullMQ) for horizontal scale and retries
 - Support additional MPEG versions only if required
 - Add request logging / metrics for production use
